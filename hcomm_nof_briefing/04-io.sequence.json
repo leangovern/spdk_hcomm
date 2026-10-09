@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "阶段三 · 下发 IO（零拷贝数据面）",
+    "output": "04-io.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1330,
+      1020
+    ],
+    "views": [
+      {
+        "id": "submit",
+        "label": "命令提交",
+        "focus": [
+          "app",
+          "hcomm",
+          "shmem",
+          "libhcomm"
+        ],
+        "note": "cid 分配 + 96B SQE 构造 + keyed SGL 填充。"
+      },
+      {
+        "id": "device-forward",
+        "label": "Device 转发",
+        "focus": [
+          "libhcomm",
+          "hixi",
+          "tgt"
+        ],
+        "note": "RTSQ 任务驱动 HIXI 按 cid 转发 SQE。"
+      },
+      {
+        "id": "data-and-cqe",
+        "label": "数据搬运与完成",
+        "focus": [
+          "tgt",
+          "shmem",
+          "hcomm",
+          "app"
+        ],
+        "note": "TGT 零拷贝读写 user_buf 并直写 cqe_buf[cid]。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "app",
+      "type": "frontend",
+      "label": "SPDK 应用",
+      "sublabel": "read / write 回调"
+    },
+    {
+      "id": "hcomm",
+      "type": "backend",
+      "label": "HCOMM transport",
+      "sublabel": "submit / process_completions"
+    },
+    {
+      "id": "shmem",
+      "type": "database",
+      "label": "共享内存",
+      "sublabel": "sq_buf[cid] / cqe_buf[cid]"
+    },
+    {
+      "id": "libhcomm",
+      "type": "backend",
+      "label": "libhcomm",
+      "sublabel": "HcommSendOnThread"
+    },
+    {
+      "id": "hixi",
+      "type": "cloud",
+      "label": "Device hcomm transport",
+      "sublabel": "A5 AI CPU（双边 SEND）"
+    },
+    {
+      "id": "tgt",
+      "type": "database",
+      "label": "TGT NOF 服务",
+      "sublabel": "SQE 消费 + RDMA"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 405,
+      "label": "命令提交（HOST 侧）"
+    },
+    {
+      "from": 425,
+      "to": 580,
+      "label": "Device 转发（SQE → TGT）"
+    },
+    {
+      "from": 600,
+      "to": 935,
+      "label": "数据搬运 + CQE 回写（TGT → HOST）"
+    }
+  ],
+  "messages": [
+    {
+      "id": "i1",
+      "from": "app",
+      "to": "hcomm",
+      "y": 185,
+      "label": "spdk_nvme_ns_cmd_read(qpair, user_buf, lba, count, cb)",
+      "variant": "emphasis",
+      "note": "submit_request 先 reserve_cid：free_cids 栈弹出 → req_for_cid[cid]=req → active_cids 尾插；分配 cid 即分配 SQE 槽（无环 / 无 doorbell / 无满检查）"
+    },
+    {
+      "id": "i3",
+      "from": "hcomm",
+      "to": "shmem",
+      "y": 258,
+      "label": "写 sq_buf[cid]：96B SQE",
+      "variant": "emphasis",
+      "note": "标准 64B cmd 逐字节 + DW22 路由字 ctrlid|sqid + DW23 JFR token；MPTR=cid（TGT 定位 CQE 槽）"
+    },
+    {
+      "id": "i4",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 318,
+      "label": "mem_map 按需注册（HcommMemReg + HcommMemExport → tokenId）",
+      "note": "64 条目 LRU 缓存 + 引用计数防驱逐；DPTR = keyed SGL{key=tokenId, addr=user_buf, len}；多段 SGL 写尾部描述符数组，DPTR 放 LAST_SEGMENT 计数"
+    },
+    {
+      "id": "i5",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 372,
+      "label": "spdk_wmb() → HcommSendOnThread(thread, channel, sq_buf[cid], 96+nsgl×16)",
+      "variant": "emphasis",
+      "note": "变长 SEND：base + 尾部描述符实际字节数；失败置 transport_failure_reason=LOCAL 触发重连"
+    },
+    {
+      "id": "i6",
+      "from": "libhcomm",
+      "to": "hixi",
+      "y": 448,
+      "label": "A5 任务流入队（RTSQ，AICPU_TS 引擎）"
+    },
+    {
+      "id": "i7",
+      "from": "hixi",
+      "to": "shmem",
+      "y": 492,
+      "label": "按 cid 读取 sq_buf[cid] 源缓冲（共享内存直读）",
+      "variant": "dashed"
+    },
+    {
+      "id": "i8",
+      "from": "hixi",
+      "to": "tgt",
+      "y": 540,
+      "label": "双边 SEND：整条 SQE（96B + 尾部 SGL）直达 TGT（channel 对端）",
+      "variant": "emphasis",
+      "note": "TGT 解析：DPTR keyed SGL 取 tokenId 与 user_buf 地址；MPTR(cid) 定位完成槽；DW22/DW23 路由到对应 ctrlr/sq。非 A5 芯片 HcommSendOnThread 返回 NOT_SUPPORT"
+    },
+    {
+      "id": "i10",
+      "from": "tgt",
+      "to": "shmem",
+      "y": 636,
+      "label": "READ：UB RDMA-write 直写 user_buf（fire & forget，零拷贝）",
+      "variant": "emphasis",
+      "note": "WRITE 反向：TGT RDMA-read user_buf 再落盘；user_buf 的 tokenId 已在 exchangeAllMems 中交换给 TGT"
+    },
+    {
+      "id": "i11",
+      "from": "tgt",
+      "to": "shmem",
+      "y": 706,
+      "label": "RDMA-write cqe_buf[cid]：16B spdk_nvme_cpl + padding[0]=1（wmb）",
+      "variant": "emphasis",
+      "note": "CQE 偏移 = cid × 64；非环形，TGT 直写槽位；HOST 完成 memset 后槽位复用"
+    },
+    {
+      "id": "i12",
+      "from": "hcomm",
+      "to": "shmem",
+      "y": 776,
+      "label": "process_completions：轮询 active_cids 的 padding[0]",
+      "note": "只遍历在途集合 O(in-flight)；max_completions==0 语义为不限量（admin poller / fabrics connect poll / 同步忙等都传 0）；spdk_rmb 后 assert(cpl.cid==cid)；释放 mem_map 引用 → nvme_complete_request → memset 槽 + wmb → free_cid 回池"
+    },
+    {
+      "id": "i13",
+      "from": "hcomm",
+      "to": "app",
+      "y": 868,
+      "label": "cb_fn(req, cpl)（数据已在 user_buf，无拷贝）",
+      "variant": "return"
+    },
+    {
+      "id": "i14",
+      "from": "app",
+      "to": "hcomm",
+      "y": 906,
+      "label": "继续投递下一条命令（cid 池循环使用）",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "hcomm",
+      "from": 190,
+      "to": 920,
+      "type": "backend"
+    },
+    {
+      "participant": "libhcomm",
+      "from": 312,
+      "to": 390,
+      "type": "backend"
+    },
+    {
+      "participant": "hixi",
+      "from": 443,
+      "to": 555,
+      "type": "cloud"
+    },
+    {
+      "participant": "tgt",
+      "from": 545,
+      "to": 760,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "与 TGT 的每命令交互契约",
+      "items": [
+        "SQE 线格式（96B）：标准 NVMe 64B + DW22 路由字(ctrlid|sqid) + DW23 jetty_token，MPTR=cid",
+        "DPTR keyed SGL {tokenId, user_buf, len}：TGT 不经 bounce buffer 直接 RDMA 读写用户缓冲",
+        "完成路径：TGT 直写 cqe_buf[cid]（16B cpl + padding[0] 有效位），HOST 轮询收割",
+        "HcommSendOnThread 仅 A5（DEV_TYPE_950）支持：Device 侧 hcomm 传输层执行，无配套应用"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "cid 即资源单位",
+      "items": [
+        "free_cids 单链表栈 O(1) 分配，active_cids swap-remove O(1) 收割",
+        "分配 cid == 分配 SQE 槽 == 绑定 cqe_buf[cid] 完成槽，一一对应",
+        "深度单一来源 qsize（clamp 到设备 sqMaxDepth，不取 2 的幂）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "多 SGL 扩展（变长 SEND）",
+      "items": [
+        "单段：keyed 描述符直写 DPTR，字节流与旧格式完全一致（老 TGT 兼容）",
+        "多段：N 个 keyed 描述符在尾部数组（偏移 96），DPTR 放 LAST_SEGMENT 计数（length=N×16 唯一计数信源）",
+        "SEND 长度 = 96 + N×16；段数上限 min(16, ICD, MSDBD)"
+      ]
+    }
+  ]
+}

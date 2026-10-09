@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "visual-check",
+  "status": "skipped",
+  "visualReview": "pending",
+  "artifact": {
+    "path": "/home/yunyang/spdk_dev/spdk_hcomm/hcomm_nof_briefing/04-io.sequence.html",
+    "sha256": "9ad2c9c97631fe03c8589b04b4ecdf72cbff6981edcdee56ef68e8b252e0dd32",
+    "bytes": 641776
+  },
+  "state": {
+    "detail": "read",
+    "motion": "still"
+  },
+  "chrome": {
+    "status": "unavailable",
+    "executable": null
+  },
+  "containment": {
+    "status": "skipped",
+    "viewports": []
+  },
+  "captures": {
+    "status": "skipped",
+    "screenshots": [],
+    "contactSheet": null
+  },
+  "sidecars": {
+    "receipt": "04-io.sequence.visual-check.json",
+    "contactSheet": "04-io.sequence.visual-check.html"
+  },
+  "error": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path."
+}

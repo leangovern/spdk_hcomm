@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "阶段二 · 建链（三阶段异步：hcomm 握手 → fabrics CONNECT → 收割）",
+    "output": "03-connect.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1360, 1150],
+    "views": [
+      {
+        "id": "phase1-worker",
+        "label": "Phase 1 · worker 阻塞握手",
+        "focus": ["spdk", "worker", "hcomm", "libhcomm", "tgt"],
+        "note": "hcomm 级握手全在 worker 线程，结果经 connect_state 原子发布。"
+      },
+      {
+        "id": "phase2-3-poll",
+        "label": "Phase 2/3 · poll 驱动 fabrics CONNECT",
+        "focus": ["spdk", "hcomm", "tgt"],
+        "note": "NVMe-oF CONNECT 走数据面，poll 线程收割 CQE 后置 CONNECTED。"
+      },
+      {
+        "id": "failure",
+        "label": "失败回滚",
+        "focus": ["hcomm", "libhcomm"],
+        "note": "connect_unwind 幂等清理，框架等待者观察到终态。"
+      }
+    ]
+  },
+  "participants": [
+    { "id": "spdk", "type": "frontend", "label": "SPDK 框架 / poll 线程", "sublabel": "adminq poller / poll group" },
+    { "id": "worker", "type": "backend", "label": "connect worker", "sublabel": "pthread（Phase 1 阻塞）" },
+    { "id": "hcomm", "type": "backend", "label": "HCOMM transport", "sublabel": "connect_poll 状态机" },
+    { "id": "libhcomm", "type": "backend", "label": "libhcomm / HCCP", "sublabel": "socket + UB 栈" },
+    { "id": "tgt", "type": "database", "label": "TGT NOF 服务", "sublabel": "traddr:trsvcid" }
+  ],
+  "segments": [
+    { "from": 150, "to": 250, "label": "异步 offload（qpair 保持 CONNECTING）" },
+    { "from": 270, "to": 700, "label": "Phase 1 · worker：hcomm 握手（阻塞）" },
+    { "from": 720, "to": 1024, "label": "Phase 2/3 · poll：fabrics CONNECT + 收割 CQE" }
+  ],
+  "messages": [
+    { "id": "c1", "from": "spdk", "to": "hcomm", "y": 185, "label": "ctrlr_connect_qpair(qpair)（adminq 或 IO qpair）", "variant": "emphasis" },
+    { "id": "c2", "from": "hcomm", "to": "worker", "y": 236, "label": "pthread_create(connect_worker)（置 WORKING，返回 0）", "note": "后续全部由 poll 路径驱动：框架 adminq poller / 同步 IO qpair 忙等 / poll group——它也是唯一会在此 qpair 收发 NVMe 流量的线程" },
+    { "id": "c3", "from": "worker", "to": "hcomm", "y": 308, "label": "qpair_connect：先复位 cqe_buf（清 stale valid 标志）", "note": "上一连接未收割的 padding[0]=1 会在重连后伪造完成；此刻无在途命令，TGT 不会竞争此写" },
+    { "id": "c4", "from": "worker", "to": "libhcomm", "y": 364, "label": "HcommMemReg(sq_buf/cqe_buf) + HcommMemExport(cqe) → cqe_tokenid", "variant": "emphasis", "note": "注册须覆盖全 slot stride（尾部 SGL 是被发送字节）；tokenId 随 NOF 握手发给 TGT" },
+    { "id": "c5", "from": "worker", "to": "libhcomm", "y": 420, "label": "HcommThreadAlloc(AICPU_TS)（A5 任务流）" },
+    { "id": "c6", "from": "worker", "to": "libhcomm", "y": 476, "label": "qpair_create_channel：UBOE 预建 CLIENT socket（socket_lock 单例）", "variant": "dashed", "note": "规避 AicpuTsUboeChannel 按 IP 字节比较定角色 bug；UBC_TP 走库内 socket" },
+    { "id": "c7", "from": "worker", "to": "libhcomm", "y": 532, "label": "NOF socket：WhiteListAdd → RaSocketBatchConnect（异步）→ RaGetSockets 有界轮询" },
+    { "id": "c8", "from": "libhcomm", "to": "tgt", "y": 576, "label": "HCCP 白名单握手（256B tag → a5a5a）", "variant": "dashed" },
+    { "id": "c9", "from": "worker", "to": "libhcomm", "y": 620, "label": "HcommChannelCreate(endpoint, engine, desc{port=trsvcid, exchangeAllMems})", "variant": "emphasis", "note": "每 qpair 一条 channel（=一条 jetty，CONN_RM）；库内完成 socket + UB 建链 + 全量内存交换（sq/cqe lmem + user_buf 注册段）" },
+    { "id": "c10", "from": "worker", "to": "tgt", "y": 668, "label": "NOF 握手 send：nvmf_cm_conn_req{qid, sq/rq_size, ini_cqe_addr, cqe_tokenid, eid, psn, JFR token=0xACFE}", "variant": "emphasis" },
+    { "id": "c11", "from": "tgt", "to": "worker", "y": 706, "label": "recv：nvmf_cm_conn_resp{ctrl_id, TGT jetty 身份{eid/uasid/jetty_id/tp_handle/psn/token}}", "variant": "return" },
+    { "id": "c12", "from": "worker", "to": "hcomm", "y": 752, "label": "connect_state 原子发布 LINK_UP / FAILED", "variant": "dashed", "note": "worker 不再碰 NVMe/qpair 状态机字段；断连竞争用 SEQ_CST 栅栏 + connect_aborted（Dekker 模式），恰好一方回滚" },
+    { "id": "c13", "from": "spdk", "to": "hcomm", "y": 808, "label": "process_completions → qpair_connect_poll（状态机轮询）" },
+    { "id": "c14", "from": "hcomm", "to": "tgt", "y": 852, "label": "Phase 2：nvme_fabric_qpair_connect_async 发 fabrics CONNECT（FCTYPE 0x7f）", "variant": "emphasis", "note": "走同一条数据面：SQE 写 sq_buf → HcommSendOnThread → A5 传输层 → TGT；admin CONNECT 在 TGT 创建 controller 并回 cntlid，IO CONNECT 绑定 qid" },
+    { "id": "c15", "from": "tgt", "to": "hcomm", "y": 898, "label": "CONNECT 应答 CQE 直写 cqe_buf[cid]（padding[0]=1）", "variant": "return" },
+    { "id": "c16", "from": "hcomm", "to": "spdk", "y": 944, "label": "Phase 3：fabric_qpair_connect_poll 收割 → qpair 置 CONNECTED", "variant": "emphasis", "note": "框架推进（WAIT_FOR_CONNECT_ADMINQ / check_enabled）并重发 CONNECTING 期间排队的请求" },
+    { "id": "c17", "from": "hcomm", "to": "libhcomm", "y": 1000, "label": "失败路径：connect_unwind → connect_cleanup（幂等）→ disconnect_qpair_done", "variant": "dashed", "note": "cleanup 逆序释放 channel/Thread/MemReg；disconnect_qpair_done abort 排队请求并置 DISCONNECTED，reconnect 与两个框架等待者均观察到终态" }
+  ],
+  "activations": [
+    { "participant": "hcomm", "from": 190, "to": 1010, "type": "backend" },
+    { "participant": "worker", "from": 241, "to": 760, "type": "backend" },
+    { "participant": "libhcomm", "from": 358, "to": 640, "type": "backend" },
+    { "participant": "tgt", "from": 570, "to": 910, "type": "database" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "三阶段为何这样切",
+      "items": [
+        "Phase 1（worker）：所有阻塞 HCCP 调用（MemReg/ChannelCreate/NOF 握手）不占 reactor",
+        "Phase 2/3（poll 线程）：fabrics CONNECT 复用数据面收发，poll 线程是唯一提交/收割 NVMe 流量的线程（rdma/tcp 同款模式）",
+        "worker 与 poll 之间只经 connect_state 原子交接（IDLE/WORKING/LINK_UP/FABRIC_SENT/FAILED）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "与 TGT 的两条连接 + 握手帧",
+      "items": [
+        "NOF 侧信道（Ra* socket）：per-qpair CM 帧，交换 qid/深度/ini_cqe_addr/cqe_tokenid ↔ ctrl_id/TGT jetty 身份",
+        "UB channel（Jetty CONN_RM）：数据面，exchangeAllMems 让 TGT 获得 INI tokenId 映射（零拷贝前提）",
+        "两条连接在首个 qpair 建链时懒创建（socket_lock），后续 qpair 复用；ctrlr 级生命周期"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "断连与失败回滚",
+      "items": [
+        "断连按阶段分支：WORKING → 置 connect_aborted 让 worker 自行回滚；FABRIC_SENT → 有界 drain fabrics CONNECT 再清理；其余直接 cleanup",
+        "connect_cleanup 幂等：任意失败/中止路径可安全调用，保证重连总从干净状态开始",
+        "connect_unwind → nvme_transport_ctrlr_disconnect_qpair_done：abort 排队请求 + DISCONNECTED（pcie/tcp 模式），解锁 reconnect"
+      ]
+    }
+  ]
+}

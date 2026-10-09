@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "阶段四 · 资源销毁（qpair → ctrlr → 全局单例）",
+    "output": "05-teardown.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1330,
+      1010
+    ],
+    "views": [
+      {
+        "id": "io-qpair-teardown",
+        "label": "IO qpair 删除",
+        "focus": [
+          "spdk",
+          "hcomm",
+          "libhcomm",
+          "tgt"
+        ],
+        "note": "先收割在途请求，再逆序拆除 qpair 资源。"
+      },
+      {
+        "id": "ctrlr-teardown",
+        "label": "ctrlr 级销毁",
+        "focus": [
+          "hcomm",
+          "libhcomm",
+          "tgt"
+        ],
+        "note": "adminq、NOF 侧信道、预建 socket、mem_map。"
+      },
+      {
+        "id": "singleton-release",
+        "label": "全局单例引用计数释放",
+        "focus": [
+          "hcomm",
+          "libhcomm",
+          "device"
+        ],
+        "note": "最后一个 ctrlr 销毁时才真正回收进程级资源。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "spdk",
+      "type": "frontend",
+      "label": "SPDK 应用 / 状态机",
+      "sublabel": "detach / del_io_qpair"
+    },
+    {
+      "id": "hcomm",
+      "type": "backend",
+      "label": "HCOMM transport",
+      "sublabel": "delete_io_qpair / destruct"
+    },
+    {
+      "id": "libhcomm",
+      "type": "backend",
+      "label": "libhcomm / HCCP",
+      "sublabel": "销毁 API"
+    },
+    {
+      "id": "device",
+      "type": "cloud",
+      "label": "Device AI CPU",
+      "sublabel": "hccp_service / RTSQ"
+    },
+    {
+      "id": "tgt",
+      "type": "database",
+      "label": "TGT NOF 服务",
+      "sublabel": "连接回收"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 500,
+      "label": "IO qpair 删除（含在途收割）"
+    },
+    {
+      "from": 520,
+      "to": 770,
+      "label": "ctrlr 级销毁（adminq + 共享资源）"
+    },
+    {
+      "from": 790,
+      "to": 950,
+      "label": "全局单例引用计数释放"
+    }
+  ],
+  "messages": [
+    {
+      "id": "d1",
+      "from": "spdk",
+      "to": "hcomm",
+      "y": 185,
+      "label": "spdk_nvme_ctrlr_del_io_qpair(qpair) / ctrlr detach",
+      "variant": "emphasis",
+      "note": "若 connect worker 仍在跑：pthread_join 后本线程独占 qpair 全部 hcomm 资源（幂等清扫覆盖 worker 可能留下的任意终态）"
+    },
+    {
+      "id": "d3",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 272,
+      "label": "disconnect_qpair 按阶段分支 + abort_reqs 收割在途",
+      "variant": "emphasis",
+      "note": "断连三态：WORKING → 置 connect_aborted（Dekker 模式，worker 自行回滚）；FABRIC_SENT → 有界 drain fabrics CONNECT；其余直接 connect_cleanup；最后 disconnect_qpair_done（abort 排队请求 + 置 DISCONNECTED）。abort_reqs 逐 cid 以 ABORTED_SQ_DELETION 完成"
+    },
+    {
+      "id": "d4",
+      "from": "libhcomm",
+      "to": "tgt",
+      "y": 320,
+      "label": "UB 连接拆除（Jetty 释放，per-qpair）",
+      "variant": "dashed"
+    },
+    {
+      "id": "d5",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 368,
+      "label": "connect_cleanup / 手动路径：HcommThreadFree + HcommMemUnreg ×2（幂等）"
+    },
+    {
+      "id": "d6",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 414,
+      "label": "mem_map 引用清扫（防御性 sweep 全 cid）",
+      "variant": "dashed"
+    },
+    {
+      "id": "d7",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 460,
+      "label": "HcommMemUnreg(sq_lmem) + HcommMemUnreg(cqe_lmem)",
+      "note": "随后 destroy_queues：free cqe/sq/req_for_cid/cid 池 → nvme_qpair_deinit → free(hqpair)"
+    },
+    {
+      "id": "d9",
+      "from": "spdk",
+      "to": "hcomm",
+      "y": 560,
+      "label": "ctrlr_destruct（detach 路径）",
+      "note": "先 delete adminq（qid=0 走同一删除管线：断链 + 收割 + Unreg + destroy_queues）"
+    },
+    {
+      "id": "d11",
+      "from": "hcomm",
+      "to": "tgt",
+      "y": 640,
+      "label": "NOF 断开：RaSocketWhiteListDel + RaSocketBatchClose(nof_fd)",
+      "variant": "dashed",
+      "note": "socket_lock 下执行；TGT 侧连接回收；随后 release_global_socket 平衡引用计数"
+    },
+    {
+      "id": "d12",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 690,
+      "label": "SocketDestroy（UBOE 预建 CLIENT socket，ctrlr 级）"
+    },
+    {
+      "id": "d13",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 736,
+      "label": "mem_map_destroy（注销全部缓存 user_buf 注册段）"
+    },
+    {
+      "id": "d14",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 812,
+      "label": "release_global_endpoint：refcnt-- → 0 时 HcommEndpointDestroy",
+      "variant": "emphasis",
+      "note": "多 ctrlr 场景只有最后一个 destruct 才真正销毁 endpoint"
+    },
+    {
+      "id": "d15",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "y": 856,
+      "label": "release_global_ctx：RaCtxDeinit + 清空 dev_attr 缓存"
+    },
+    {
+      "id": "d16",
+      "from": "hcomm",
+      "to": "device",
+      "y": 898,
+      "label": "acl_release_device（refcnt-- → 0 时 aclrtReset）",
+      "variant": "dashed",
+      "note": "nvme_ctrlr_destruct_finish + free(hctrlr) 收尾；socket_lock 销毁"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "hcomm",
+      "from": 190,
+      "to": 910,
+      "type": "backend"
+    },
+    {
+      "participant": "libhcomm",
+      "from": 266,
+      "to": 870,
+      "type": "backend"
+    },
+    {
+      "participant": "tgt",
+      "from": 315,
+      "to": 660,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "在途请求收割（防 use-after-free）",
+      "items": [
+        "delete_io_qpair 先 abort_reqs 再拆队列数组：杜绝在途请求引用已释放的 cqe_buf/req_for_cid",
+        "断链先于收割：TGT 停止 DMA 后才能安全读 cqe_buf 并置 ABORTED 完成",
+        "每个 cid 的 mem_map 引用随收割释放，LRU 条目不残留 pin"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "与 TGT 的断开交互",
+      "items": [
+        "数据面：HcommChannelDestroy（per-qpair，互不影响其他 qpair）",
+        "控制面：NOF 白名单条目删除 + socket 关闭（rs 子进程不残留 stale 条目）",
+        "共享 socket 生命周期跟随 ctrlr：单 qpair 断开不拆共享资源"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "三层资源逆序释放",
+      "items": [
+        "qpair 层：join worker → 断链 → thread → mem_map 引用 → MemUnreg → 队列数组 → qpair_deinit",
+        "ctrlr 层：adminq → NOF fd → 预建 socket → mem_map → endpoint/ctx/ACL 引用",
+        "全局层：引用计数归零才真正销毁（endpoint / RaCtx / RaSocket / ACL），保证多 ctrlr 安全"
+      ]
+    }
+  ]
+}

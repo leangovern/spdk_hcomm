@@ -1,0 +1,463 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "NOF INI HCOMM Transport 端到端架构",
+    "output": "01-arch.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1280,
+      720
+    ],
+    "views": [
+      {
+        "id": "data-plane",
+        "label": "数据面主链",
+        "focus": [
+          "app",
+          "nvme_core",
+          "hcomm",
+          "shmem",
+          "hixi",
+          "rtsq",
+          "ubjetty",
+          "nofsvc"
+        ],
+        "note": "一条 NVMe 命令从 SPDK 应用到远端 SSD 的零拷贝通路。"
+      },
+      {
+        "id": "dual-channel",
+        "label": "双通路设计",
+        "focus": [
+          "hcomm",
+          "libhcomm",
+          "nofsvc",
+          "ubjetty",
+          "rtsq"
+        ],
+        "note": "UB channel 承载 SQE 转发，NOF 侧信道承载 CM 握手。"
+      },
+      {
+        "id": "shmem-accessors",
+        "label": "共享内存访问者",
+        "focus": [
+          "hcomm",
+          "hixi",
+          "nofsvc",
+          "shmem"
+        ],
+        "note": "出向：HOST 写、A5 读 sq_buf；回向：TGT 直写 cqe_buf / user_buf。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "app",
+      "type": "frontend",
+      "label": "SPDK 应用",
+      "sublabel": "spdk_nvme_ns_cmd_read / write",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "nvme_core",
+      "type": "backend",
+      "label": "NVMe 核心层",
+      "sublabel": "nvme_fabric_ctrlr_* 状态机",
+      "pos": [
+        40,
+        210
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "hcomm",
+      "type": "backend",
+      "label": "HCOMM transport",
+      "sublabel": "nvme_hcomm.c（INI 侧）",
+      "tag": "trtype=4098",
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "libhcomm",
+      "type": "backend",
+      "label": "libhcomm.so",
+      "sublabel": "Hcomm* / Ra* C API",
+      "pos": [
+        40,
+        460
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "shmem",
+      "type": "database",
+      "label": "共享内存（cid 索引数组）",
+      "sublabel": "sq_buf[cid] / cqe_buf[cid]，64B 对齐 DMA",
+      "pos": [
+        330,
+        290
+      ],
+      "size": [
+        200,
+        120
+      ]
+    },
+    {
+      "id": "hixi",
+      "type": "backend",
+      "label": "Device hcomm transport",
+      "sublabel": "A5 AI CPU 执行双边 SEND",
+      "tag": "hcomm 库内建，无配套应用",
+      "pos": [
+        640,
+        150
+      ],
+      "size": [
+        180,
+        70
+      ]
+    },
+    {
+      "id": "rtsq",
+      "type": "messagebus",
+      "label": "RTSQ 硬件任务流",
+      "sublabel": "AICPU_TS 引擎（仅 A5）",
+      "pos": [
+        640,
+        430
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "ubjetty",
+      "type": "messagebus",
+      "label": "TGT Jetty / JFR",
+      "sublabel": "CONN_RM 单边可靠消息",
+      "pos": [
+        980,
+        130
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "nofsvc",
+      "type": "backend",
+      "label": "TGT NOF 服务",
+      "sublabel": "trsvcid 监听 + SQE 消费",
+      "pos": [
+        980,
+        250
+      ],
+      "size": [
+        190,
+        70
+      ]
+    },
+    {
+      "id": "ssd",
+      "type": "database",
+      "label": "NVMe SSD",
+      "sublabel": "命名空间存储介质",
+      "pos": [
+        980,
+        370
+      ],
+      "size": [
+        190,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "INI 节点（HOST 普通 CPU + Device AI CPU）",
+      "wraps": [
+        "app",
+        "nvme_core",
+        "hcomm",
+        "libhcomm",
+        "shmem",
+        "hixi",
+        "rtsq"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "TGT 节点（远端 NVMe 存储）",
+      "wraps": [
+        "ubjetty",
+        "nofsvc",
+        "ssd"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cmd-path",
+      "from": "app",
+      "to": "nvme_core",
+      "label": "NVMe 命令",
+      "labelAt": [
+        125,
+        174
+      ]
+    },
+    {
+      "id": "ops-dispatch",
+      "from": "nvme_core",
+      "to": "hcomm",
+      "label": "hcomm_ops 派发",
+      "labelAt": [
+        118,
+        284
+      ]
+    },
+    {
+      "id": "api-calls",
+      "from": "hcomm",
+      "to": "libhcomm",
+      "label": "建链 / 注册 / 发送",
+      "labelAt": [
+        125,
+        414
+      ]
+    },
+    {
+      "id": "sqe-write",
+      "from": "hcomm",
+      "to": "shmem",
+      "label": "写 sq_buf[cid]",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        268,
+        318
+      ]
+    },
+    {
+      "id": "cqe-poll",
+      "from": "hcomm",
+      "to": "shmem",
+      "label": "轮询 cqe_buf[cid]",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        268,
+        398
+      ]
+    },
+    {
+      "id": "hixi-read",
+      "from": "hixi",
+      "to": "shmem",
+      "label": "读 SQE 源缓冲",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "send-thread",
+      "from": "libhcomm",
+      "to": "rtsq",
+      "label": "HcommSendOnThread（SEND 任务入队）",
+      "via": [
+        [
+          360,
+          490
+        ],
+        [
+          360,
+          462
+        ]
+      ],
+      "labelAt": [
+        540,
+        448
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "rtsq-flow",
+      "from": "rtsq",
+      "to": "hixi",
+      "label": "A5 任务流驱动执行",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        800,
+        325
+      ]
+    },
+    {
+      "id": "ub-send",
+      "from": "hixi",
+      "to": "ubjetty",
+      "label": "UB 双边 SEND（SQE → TGT）",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          900,
+          185
+        ],
+        [
+          900,
+          162
+        ]
+      ],
+      "labelAt": [
+        900,
+        148
+      ]
+    },
+    {
+      "id": "nof-side",
+      "from": "libhcomm",
+      "to": "nofsvc",
+      "label": "NOF 侧信道（RaSocket CM 握手）",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          125,
+          590
+        ],
+        [
+          1230,
+          590
+        ],
+        [
+          1230,
+          285
+        ]
+      ],
+      "labelAt": [
+        640,
+        575
+      ]
+    },
+    {
+      "id": "jetty-enqueue",
+      "from": "ubjetty",
+      "to": "nofsvc",
+      "label": "SQE 入队",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1075,
+        226
+      ]
+    },
+    {
+      "id": "nvme-io",
+      "from": "nofsvc",
+      "to": "ssd",
+      "label": "NVMe 读写",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1075,
+        347
+      ]
+    },
+    {
+      "id": "rdma-cqe",
+      "from": "ubjetty",
+      "to": "shmem",
+      "label": "RDMA 直写 cqe_buf[cid] / user_buf",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          1215,
+          162
+        ],
+        [
+          1215,
+          118
+        ],
+        [
+          430,
+          118
+        ]
+      ],
+      "labelAt": [
+        700,
+        105
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "零拷贝数据面",
+      "items": [
+        "user_buf 经 mem_map 按需注册（HcommMemReg + HcommMemExport，tokenId LRU 缓存）",
+        "DPTR = keyed SGL {tokenId, user_buf 地址, 长度}，TGT 直接 RDMA 读写用户缓冲，无 bounce buffer",
+        "cqe_buf[cid].padding[0] 为完成有效标记，HOST 只轮询 active_cids 在途集合",
+        "HcommSendOnThread 为双边 SEND：由 A5（DEV_TYPE_950）AI CPU 上的 hcomm 传输层执行，SQE 经 channel 直达 TGT，无需 Device 侧配套应用（非 A5 返回 NOT_SUPPORT）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "双通路设计（与 TGT 交互）",
+      "items": [
+        "UB channel（HcommChannelCreate，Jetty CONN_RM）：数据面，SQE 经 Device A5 传输层双边 SEND 直达 TGT",
+        "NOF 侧信道（Ra* socket）：控制面，per-qpair 交换 qid / 队列深度 / ini_cqe_addr / cqe_tokenid / jetty 身份",
+        "UBOE 部署预建 CLIENT socket（SocketCreate）规避 AicpuTsUboeChannel 按 IP 字节比较定角色的库 bug"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "共享内存的两类访问者（两条回线的由来）",
+      "items": [
+        "sq_buf[cid]：HOST 写入 → Device A5 传输层读取（双边 SEND 的源缓冲；HOST↔Device 片内共享，出向命令流）",
+        "cqe_buf[cid]：TGT NOF 服务处理完命令后经 UB RDMA 直写（凭 NOF 握手交换的 ini_cqe_addr + cqe_tokenid 定位；回向完成流）",
+        "user_buf：per-request 经 mem_map 按需注册，TGT 凭 DPTR keyed SGL tokenId 直读直写（零拷贝，独立于 sq/cqe 数组）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "资源归属（三级）",
+      "items": [
+        "进程级单例（引用计数）：HcommEndpoint / RaSocket 工厂 / RaCtx 工厂 / ACL 设备上下文",
+        "per-ctrlr：target_addr、local_eid、NOF fd、预建 socket、mem_map（96B 单线格式）",
+        "per-qpair：channel（=一条 jetty）、thread/RTSQ、sq_buf / cqe_buf、cid 池、tgt_info"
+      ]
+    }
+  ]
+}

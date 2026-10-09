@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOF INI HCOMM 实现方案串讲 · 导航</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+    background: #0f1420; color: #e6ebf5; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 40px 20px;
+  }
+  .wrap { max-width: 960px; width: 100%; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: .5px; margin-bottom: 8px; }
+  .sub { color: #93a1bd; font-size: 14px; line-height: 1.7; margin-bottom: 32px; }
+  .sub code { color: #7fd1c0; background: #1a2233; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  a.card {
+    display: block; text-decoration: none; color: inherit;
+    background: #161e2e; border: 1px solid #26314a; border-radius: 12px;
+    padding: 20px 22px; transition: border-color .15s, transform .15s;
+  }
+  a.card:hover { border-color: #4c7ad0; transform: translateY(-2px); }
+  .stage { font-size: 12px; color: #7fd1c0; font-weight: 600; letter-spacing: 2px; margin-bottom: 6px; }
+  .card h2 { font-size: 17px; margin-bottom: 8px; }
+  .card p { font-size: 13px; color: #93a1bd; line-height: 1.65; }
+  .foot { margin-top: 36px; font-size: 12px; color: #5b6a8a; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>NOF INI · HCOMM transport 实现方案串讲</h1>
+  <p class="sub">
+    SPDK NVMe-oF 发起方，经 HCOMM / UB（灵衢）总线访问远端存储。
+    代码：<code>lib/nvme/nvme_hcomm.c</code> ·
+    线格式：<code>nvme_hcomm_sqe_96b.h</code> / <code>nvme_hcomm_sqe.h</code> ·
+    每张图支持明暗主题、缩放、聚焦视图与 PNG/SVG 导出。
+  </p>
+  <div class="grid">
+    <a class="card" href="01-arch.architecture.html">
+      <div class="stage">总览</div>
+      <h2>端到端架构</h2>
+      <p>三方拓扑：HOST（SPDK）↔ Device AI CPU（HIXI/RTSQ）↔ TGT；共享内存 cid 数组、双通路（UB channel + NOF 侧信道）、三级资源归属。</p>
+    </a>
+    <a class="card" href="02-probe.sequence.html">
+      <div class="stage">阶段一</div>
+      <h2>探测与控制器构建</h2>
+      <p>UB 无 discovery，trid 直连 ctrlr_construct：全局单例（endpoint/ACL/ctx）、设备能力缓存、local_eid 探测、adminq 预分配（不建链）。</p>
+    </a>
+    <a class="card" href="03-connect.sequence.html">
+      <div class="stage">阶段二</div>
+      <h2>建链（与 TGT 交互）</h2>
+      <p>三阶段异步：Phase 1 worker 阻塞握手（MemReg/Export + ChannelCreate + NOF CM 帧，connect_state 原子发布）→ Phase 2/3 poll 驱动 fabrics CONNECT 并收割 CQE 置 CONNECTED。</p>
+    </a>
+    <a class="card" href="04-io.sequence.html">
+      <div class="stage">阶段三</div>
+      <h2>下发 IO（零拷贝）</h2>
+      <p>reserve_cid → 96B SQE（MPTR=cid + DW22 路由字）→ keyed SGL → HcommSendOnThread（双边 SEND）→ A5 传输层直达 TGT → RDMA 直写 user_buf / cqe_buf[cid] → 轮询收割（max_completions=0 不限量）。</p>
+    </a>
+    <a class="card" href="05-teardown.sequence.html">
+      <div class="stage">阶段四</div>
+      <h2>资源销毁</h2>
+      <p>qpair 层（join worker→断连三态分支→收割在途→Unreg→销毁数组）→ ctrlr 层（adminq/NOF fd/预建 socket/mem_map）→ 全局单例引用计数归零释放。</p>
+    </a>
+  </div>
+  <p class="foot">
+    生成：Archify（validate --quality showcase 全部通过；本机无 Chrome，visual-check 状态为 skipped）。
+    交付物与快照位于本目录；规格 JSON 与 HTML 同名成对。
+  </p>
+</div>
+</body>
+</html>

@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "阶段一 · 探测与控制器构建（ctrlr_construct）",
+    "output": "02-probe.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1240, 860],
+    "views": [
+      {
+        "id": "direct-attach",
+        "label": "直连探测入口",
+        "focus": ["user", "nvme", "hcomm"],
+        "note": "UB 无 discovery target：trid 直达 ctrlr_construct。"
+      },
+      {
+        "id": "singletons",
+        "label": "全局单例与设备能力",
+        "focus": ["hcomm", "libhcomm", "device"],
+        "note": "endpoint / RaCtx 引用计数单例的首次创建路径。"
+      },
+      {
+        "id": "adminq-prealloc",
+        "label": "adminq 预分配",
+        "focus": ["hcomm", "nvme", "user"],
+        "note": "只分配 cid 数组，不建链——建链推迟到 connect 阶段。"
+      }
+    ]
+  },
+  "participants": [
+    { "id": "user", "type": "external", "label": "SPDK 应用 / RPC", "sublabel": "bdev_nvme_attach" },
+    { "id": "nvme", "type": "backend", "label": "NVMe 核心层", "sublabel": "nvme_transport" },
+    { "id": "hcomm", "type": "backend", "label": "HCOMM transport", "sublabel": "nvme_hcomm.c" },
+    { "id": "libhcomm", "type": "backend", "label": "libhcomm / HCCP", "sublabel": "Hcomm* / Ra* API" },
+    { "id": "device", "type": "cloud", "label": "Device AI CPU", "sublabel": "hccp_service" },
+    { "id": "tgt", "type": "database", "label": "TGT", "sublabel": "本阶段未触达" }
+  ],
+  "segments": [
+    { "from": 150, "to": 330, "label": "直连探测（无 discovery）" },
+    { "from": 350, "to": 652, "label": "全局单例 + 设备能力查询" },
+    { "from": 672, "to": 786, "label": "adminq 预分配（不建链）" }
+  ],
+  "messages": [
+    { "id": "m1", "from": "user", "to": "nvme", "y": 185, "label": "connect(trid: trtype=HCOMM, traddr, trsvcid, subnqn)", "variant": "emphasis" },
+    { "id": "m2", "from": "nvme", "to": "hcomm", "y": 228, "label": "ctrlr_scan → nvme_fabric_ctrlr_scan（直连模式）", "note": "UB fabric 无 discovery target，trid 即目标，不发送任何探测报文" },
+    { "id": "m3", "from": "nvme", "to": "hcomm", "y": 300, "label": "ctrlr_construct(trid, opts)", "note": "先 parse_trsvcid（缺端口早失败）+ init_global_settings：解析 SPDK_HCOMM_NETWORK_MODE / PROTOCOL / PHY_ID，一次解析全局稳定" },
+    { "id": "m5", "from": "hcomm", "to": "libhcomm", "y": 388, "label": "aclrtSetDevice(phy_id)（offline 模式，引用计数）", "variant": "security", "note": "选择 NPU 设备；库读线程本地设备上下文，必须在 endpoint 创建前执行" },
+    { "id": "m6", "from": "libhcomm", "to": "device", "y": 428, "label": "dlopen(libascendcl) + 设备上下文绑定" },
+    { "id": "m7", "from": "hcomm", "to": "libhcomm", "y": 476, "label": "HcommEndpointCreate(endpointDesc)（单例，引用计数）", "variant": "emphasis", "note": "endpointDesc：协议 + 本地 IP（或目标 IP 由库内匹配设备 EID 表）；offline 时 locType=DEVICE + devPhyId" },
+    { "id": "m8", "from": "libhcomm", "to": "device", "y": 516, "label": "自动拉起 hccp_service（RaInit + HDC）", "variant": "dashed" },
+    { "id": "m9", "from": "hcomm", "to": "libhcomm", "y": 562, "label": "RaGetDevEidInfoList → RaCtxInit → RaGetDevBaseAttr", "note": "先填 attr.ub.eid 再 RaCtxInit，否则 rc=128003；缓存 sqMaxDepth/rqMaxDepth 用于队列深度钳制" },
+    { "id": "m10", "from": "libhcomm", "to": "device", "y": 600, "label": "CTX_INIT + 设备能力查询" },
+    { "id": "m11", "from": "hcomm", "to": "libhcomm", "y": 636, "label": "RaGetIfaddrs + RaGetEidByIp → local_eid（尽力而为）", "variant": "dashed", "note": "检测失败不致命：local_eid 置零，TGT 必须从 channel 状态推导 INI 身份（契约）" },
+    { "id": "m12", "from": "hcomm", "to": "nvme", "y": 688, "label": "adminq = create_qpair(qid=0)（仅分配）", "variant": "return", "note": "nvme_qpair_init + create_queues：分配 cqe_buf / sq_buf / cid 池（clamp 到 sqMaxDepth）；不创建 channel、不握手" },
+    { "id": "m13", "from": "hcomm", "to": "nvme", "y": 728, "label": "nvme_ctrlr_add_process(ctrlr, 0)" },
+    { "id": "m14", "from": "nvme", "to": "user", "y": 768, "label": "ctrlr 句柄返回（状态机待 CONNECT_ADMINQ）", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "nvme", "from": 180, "to": 780, "type": "backend" },
+    { "participant": "hcomm", "from": 292, "to": 770, "type": "backend" },
+    { "participant": "libhcomm", "from": 380, "to": 648, "type": "backend" },
+    { "participant": "device", "from": 420, "to": 618, "type": "cloud" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "探测为何不碰 TGT",
+      "items": [
+        "UB fabric 没有 discovery target，ctrlr_scan 复用 nvme_fabric_ctrlr_scan 的直连路径",
+        "本阶段只做 trid 校验（trsvcid 必填且非 0）与本地 HCCP 栈拉起",
+        "与 TGT 的首次真实交互发生在下一阶段的 NOF 握手"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "引用计数单例（进程级）",
+      "items": [
+        "ACL 设备上下文、RaSocket 工厂、RaCtx 工厂、endpoint 均为首用创建、末用销毁",
+        "RS_MAX_SOCKET_NUM=16 限制迫使多 ctrlr 共享 RaSocket/RaCtx 句柄",
+        "endpoint 身份只取决于本机 NPU（HrtRaGetDevEidInfoList），天然进程级共享"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "关键顺序约束",
+      "items": [
+        "aclrtSetDevice 先于 HcommEndpointCreate（库读线程本地上下文）",
+        "设备 EID 先填再 RaCtxInit，否则 -22 / 128003",
+        "sqMaxDepth 缓存必须在 create_queues 之前就绪，否则 channel 创建会失败"
+      ]
+    }
+  ]
+}
